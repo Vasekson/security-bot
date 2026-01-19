@@ -6,12 +6,9 @@ import json
 import os
 from datetime import datetime, timedelta
 
-# ===== INTENTS =====
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
-tree = bot.tree
+# ================== NASTAVENÍ ==================
 
-# ===== NASTAVENÍ =====
+GUILD_ID = 123456789012345678  # <-- SEM DEJ ID SVÉHO SERVERU
 LOG_CHANNEL_NAME = "log"
 
 # anti-raid
@@ -28,6 +25,12 @@ MIN_ACCOUNT_AGE_DAYS = 7
 BAD_WORDS = ["scam", "free nitro", "crypto"]
 LINK_REGEX = re.compile(r"https?://")
 
+# ==============================================
+
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", intents=intents)
+tree = bot.tree
+
 join_tracker = {}
 message_tracker = {}
 warnings = {}
@@ -35,7 +38,8 @@ warnings = {}
 raid_active = False
 raid_until = None
 
-# ===== WARN STORAGE =====
+# ================== WARN STORAGE ==================
+
 def load_warnings():
     global warnings
     try:
@@ -48,14 +52,16 @@ def save_warnings():
     with open("warnings.json", "w") as f:
         json.dump(warnings, f)
 
-# ===== READY =====
+# ================== READY ==================
+
 @bot.event
 async def on_ready():
     load_warnings()
-    await tree.sync()
+    await tree.sync(guild=discord.Object(id=GUILD_ID))
     print(f"✅ Bot přihlášen jako {bot.user}")
 
-# ===== ANTI-ALT =====
+# ================== ANTI-ALT + ANTI-RAID ==================
+
 @bot.event
 async def on_member_join(member):
     global raid_active, raid_until
@@ -65,13 +71,11 @@ async def on_member_join(member):
     log = discord.utils.get(guild.text_channels, name=LOG_CHANNEL_NAME)
 
     # anti-alt
-    account_age = (now - member.created_at).days
-    if account_age < MIN_ACCOUNT_AGE_DAYS:
+    age = (now - member.created_at).days
+    if age < MIN_ACCOUNT_AGE_DAYS:
         await member.kick(reason="Anti-alt: nový účet")
         if log:
-            await log.send(
-                f"🧪 **ANTI-ALT** – {member} kicknut (účet {account_age} dní)"
-            )
+            await log.send(f"🧪 **ANTI-ALT** – {member} kicknut (účet {age} dní)")
         return
 
     # anti-raid
@@ -87,9 +91,7 @@ async def on_member_join(member):
         raid_until = now + timedelta(minutes=5)
 
         for channel in guild.text_channels:
-            await channel.set_permissions(
-                guild.default_role, send_messages=False
-            )
+            await channel.set_permissions(guild.default_role, send_messages=False)
 
         if log:
             await log.send("🚨 **ANTI-RAID – chat uzamčen na 5 minut**")
@@ -97,13 +99,12 @@ async def on_member_join(member):
     if raid_active and now > raid_until:
         raid_active = False
         for channel in guild.text_channels:
-            await channel.set_permissions(
-                guild.default_role, send_messages=True
-            )
+            await channel.set_permissions(guild.default_role, send_messages=True)
         if log:
             await log.send("✅ **ANTI-RAID UKONČEN – chat odemčen**")
 
-# ===== ANTI-SPAM / FLOOD =====
+# ================== ANTI-SPAM ==================
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -111,7 +112,8 @@ async def on_message(message):
 
     now = datetime.utcnow()
     uid = str(message.author.id)
-    log = discord.utils.get(message.guild.text_channels, name=LOG_CHANNEL_NAME)
+    guild = message.guild
+    log = discord.utils.get(guild.text_channels, name=LOG_CHANNEL_NAME)
 
     # anti-flood
     message_tracker.setdefault(uid, [])
@@ -123,7 +125,7 @@ async def on_message(message):
 
     if len(message_tracker[uid]) >= FLOOD_MESSAGES:
         await message.delete()
-        await warn_user(message.author, message.guild, "Flood spam")
+        await warn_user(message.author, guild, "Flood spam")
         if log:
             await log.send(f"⚡ **ANTI-FLOOD** – {message.author}")
         return
@@ -132,17 +134,18 @@ async def on_message(message):
 
     if any(word in content for word in BAD_WORDS):
         await message.delete()
-        await warn_user(message.author, message.guild, "Zakázané slovo")
+        await warn_user(message.author, guild, "Zakázané slovo")
         return
 
     if LINK_REGEX.search(content):
         await message.delete()
-        await warn_user(message.author, message.guild, "Zakázaný odkaz")
+        await warn_user(message.author, guild, "Zakázaný odkaz")
         return
 
     await bot.process_commands(message)
 
-# ===== WARN / MUTE / BAN =====
+# ================== WARN / MUTE / BAN ==================
+
 async def warn_user(member, guild, reason):
     uid = str(member.id)
     warnings.setdefault(uid, 0)
@@ -163,42 +166,61 @@ async def warn_user(member, guild, reason):
         if log:
             await log.send(f"⛔ {member} BAN (3 warny)")
 
-# ===== SLASH PŘÍKAZY =====
+# ================== SLASH PŘÍKAZY ==================
 
-@tree.command(name="warnings", description="Zobrazí počet warnů")
+@tree.command(
+    name="warn",
+    description="Varuje uživatele",
+    guild=discord.Object(id=GUILD_ID)
+)
+@app_commands.checks.has_permissions(moderate_members=True)
+async def warn_cmd(interaction: discord.Interaction, member: discord.Member, reason: str = "Bez důvodu"):
+    await warn_user(member, interaction.guild, reason)
+    await interaction.response.send_message(f"⚠️ {member.mention} varován: {reason}")
+
+@tree.command(
+    name="warnings",
+    description="Zobrazí počet warnů",
+    guild=discord.Object(id=GUILD_ID)
+)
 @app_commands.checks.has_permissions(moderate_members=True)
 async def warnings_cmd(interaction: discord.Interaction, member: discord.Member):
     count = warnings.get(str(member.id), 0)
-    await interaction.response.send_message(
-        f"📊 {member.mention} má **{count}** warnů"
-    )
+    await interaction.response.send_message(f"📊 {member.mention} má **{count}** warnů")
 
-@tree.command(name="ban", description="Zabanuje uživatele")
+@tree.command(
+    name="ban",
+    description="Zabanuje uživatele",
+    guild=discord.Object(id=GUILD_ID)
+)
 @app_commands.checks.has_permissions(ban_members=True)
 async def ban_cmd(interaction: discord.Interaction, member: discord.Member, reason: str = "Bez důvodu"):
     await member.ban(reason=reason)
-    await interaction.response.send_message(
-        f"⛔ {member.mention} byl zabanován: {reason}"
-    )
+    await interaction.response.send_message(f"⛔ {member.mention} byl zabanován: {reason}")
 
-@tree.command(name="lock", description="Uzamkne chat")
+@tree.command(
+    name="lock",
+    description="Uzamkne chat",
+    guild=discord.Object(id=GUILD_ID)
+)
 @app_commands.checks.has_permissions(manage_channels=True)
-async def lock(interaction: discord.Interaction):
+async def lock_cmd(interaction: discord.Interaction):
     for channel in interaction.guild.text_channels:
-        await channel.set_permissions(
-            interaction.guild.default_role, send_messages=False
-        )
+        await channel.set_permissions(interaction.guild.default_role, send_messages=False)
     await interaction.response.send_message("🔐 Chat uzamčen")
 
-@tree.command(name="unlock", description="Odemkne chat")
+@tree.command(
+    name="unlock",
+    description="Odemkne chat",
+    guild=discord.Object(id=GUILD_ID)
+)
 @app_commands.checks.has_permissions(manage_channels=True)
-async def unlock(interaction: discord.Interaction):
+async def unlock_cmd(interaction: discord.Interaction):
     for channel in interaction.guild.text_channels:
-        await channel.set_permissions(
-            interaction.guild.default_role, send_messages=True
-        )
+        await channel.set_permissions(interaction.guild.default_role, send_messages=True)
     await interaction.response.send_message("🔓 Chat odemčen")
 
-# ===== START =====
+# ================== START ==================
+
 TOKEN = os.getenv("TOKEN")
 bot.run(TOKEN)
