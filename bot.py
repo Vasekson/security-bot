@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 # ================== NASTAVENÍ ==================
 
-GUILD_ID = 123456789012345678  # <-- SEM DEJ ID SVÉHO SERVERU
+GUILD_ID = 1462556019959005360  # <-- TVÉ ID SERVERU (už opraveno)
 LOG_CHANNEL_NAME = "log"
 
 # anti-raid
@@ -57,8 +57,14 @@ def save_warnings():
 @bot.event
 async def on_ready():
     load_warnings()
-    await tree.sync(guild=discord.Object(id=GUILD_ID))
-    print(f"✅ Bot přihlášen jako {bot.user}")
+
+    try:
+        await tree.sync(guild=discord.Object(id=GUILD_ID))
+        print("✅ Slash příkazy syncnuty pro server")
+    except Exception as e:
+        print(f"⚠️ Slash sync selhal (bot běží dál): {e}")
+
+    print(f"🤖 Bot přihlášen jako {bot.user}")
 
 # ================== ANTI-ALT + ANTI-RAID ==================
 
